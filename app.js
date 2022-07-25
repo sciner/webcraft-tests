@@ -1,4 +1,4 @@
-import { API_Client } from "../www/js/ui/api.js";
+import { API_Client } from "../webcraft/www/js/ui/api.js";
 
 // App
 export class TestApp {

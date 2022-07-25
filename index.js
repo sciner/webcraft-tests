@@ -1,4 +1,4 @@
-import { Vector } from "../www/js/helpers.js";
+import { Vector } from "../webcraft/www/js/helpers.js";
 import { Worker } from "worker_threads";
 
 class Test {

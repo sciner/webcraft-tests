@@ -1,10 +1,10 @@
 import { WebSocket } from 'ws';
-import { Vector } from "../www/js/helpers.js";
-import { ServerClient } from "../www/js/server_client.js";
-import { SpectatorPlayerControl } from "../www/js/spectator-physics.js";
+import { Vector } from "../webcraft/www/js/helpers.js";
+import { ServerClient } from "../webcraft/www/js/server_client.js";
+import { SpectatorPlayerControl } from "../webcraft/www/js/spectator-physics.js";
 import { TestApp } from "./app.js";
-import { MOUSE } from "../www/js/constant.js";
-import { CHUNK_SIZE_X } from "../www/js/chunk_const.js";
+import { MOUSE } from "../webcraft/www/js/constant.js";
+import { CHUNK_SIZE_X } from "../webcraft/www/js/chunk_const.js";
 
 //
 const API_URL                   = 'http://localhost:5700';
