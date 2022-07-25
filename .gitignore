@@ -1,0 +1,14 @@
+*.exe
+*.bak
+.idea/
+.vs/
+.vscode/
+*.sqlite3
+*.BASE.*
+*.LOCAL.*
+*.REMOTE.*
+node_modules
+package-lock.json
+.DS_Store
+*.schematic
+*.schem
