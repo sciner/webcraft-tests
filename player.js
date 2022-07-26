@@ -5,6 +5,7 @@ import { SpectatorPlayerControl } from "../webcraft/www/js/spectator-physics.js"
 import { TestApp } from "./app.js";
 import { MOUSE } from "../webcraft/www/js/constant.js";
 import { CHUNK_SIZE_X } from "../webcraft/www/js/chunk_const.js";
+import { compressPlayerStateC, decompressNearby } from "../webcraft/www/js/packet_compressor.js";
 
 //
 const API_URL                   = 'http://localhost:5700';
@@ -89,7 +90,8 @@ export class TestPlayer {
                 break;
             }
             case ServerClient.CMD_NEARBY_CHUNKS: {
-                for(let added of packet.data.added) {
+                const nearby = decompressNearby(packet.data);
+                for(let added of nearby.added) {
                     if(added.has_modifiers) {
                         this.sendWebsocketPacket(ServerClient.CMD_CHUNK_LOAD, {pos: added.addr});
                     }
@@ -130,6 +132,7 @@ export class TestPlayer {
         this.state = packet.data.state;
         // hard reset spawn position
         this.state.pos = this.pos_spawn.clone(); // new Vector(this.state.pos);
+        this.state.rotate = new Vector(this.state.rotate);
         // player control
         this.pc = new SpectatorPlayerControl(null, this.state.pos);
         // ticker interval timer
@@ -176,12 +179,12 @@ export class TestPlayer {
         */
         // Send player actual position to server
         state.pos.copyFrom(pc.player.entity.position);
-        this.sendWebsocketPacket(ServerClient.CMD_PLAYER_STATE, {
+        this.sendWebsocketPacket(ServerClient.CMD_PLAYER_STATE, compressPlayerStateC({
             rotate:     state.rotate,
             pos:        state.pos,
             sneak:      pc.controls.sneak,
             ping:       0
-        });
+        }));
     }
 
     angleTo(target) {
