@@ -1,30 +1,59 @@
 import { WebSocket } from 'ws';
 import { Vector } from "../webcraft/www/js/helpers.js";
 import { ServerClient } from "../webcraft/www/js/server_client.js";
-import { SpectatorPlayerControl } from "../webcraft/www/js/spectator-physics.js";
+import {GAME_MODE, GameMode} from "../webcraft/www/js/game_mode.js";
+import { ClientPlayerControlManager, PlayerControlManager } from "../webcraft/www/js/control/player_control_manager.js";
 import { TestApp } from "./app.js";
 import { MOUSE } from "../webcraft/www/js/constant.js";
-import { CHUNK_SIZE_X } from "../webcraft/www/js/chunk_const.js";
-import { compressPlayerStateC, decompressNearby } from "../webcraft/www/js/packet_compressor.js";
+import { decompressNearby } from "../webcraft/www/js/packet_compressor.js";
 
 //
 const API_URL                   = 'http://localhost:5700';
 const WEBSOCKET_SERVER_URL      = 'ws://127.0.0.1:5700/ws';
 const DEFAULT_VIEW_DISTANCE     = 4;
+const CHUNK_SIZE_X              = 16;
 const MAX_DIST_FROM_SPAWN       = ((DEFAULT_VIEW_DISTANCE * 2) + 3) * CHUNK_SIZE_X;
+const LOG_ALIVE_SECONDS         = 60
 
 // Player
 export class TestPlayer {
 
-    constructor(world_guid, pos_spawn, skin) {
+    static loggedUnknownPackets = []
+
+    options = {
+        is_spectator_bot: true
+    }
+    game_mode = {
+        isSpectator: () => true
+    }
+    world = {
+        server: {
+            Send: (packet) => {
+                this.ws.send(JSON.stringify(packet))
+            }
+        }
+    }
+    controls = {
+        enabled: true
+    }
+    nextLogAlive = performance.now() + LOG_ALIVE_SECONDS * 1000
+    game_mode = new GameMode(this, GAME_MODE.SPECTATOR)
+    rotate = new Vector(0, 0, 0)    // инпут игрока - вращение
+
+    constructor(world_guid, pos_spawn, skin, username) {
         this.app = new TestApp(this, API_URL);
         this.skin = skin;
         this.pos_spawn = new Vector(pos_spawn);
+        this.username = username
+        this.sharedProps = {
+            pos: new Vector(pos_spawn)
+        }
         this.world_guid = world_guid;
         if(!this.world_guid) {
             throw 'error_game_not_started';
         }
         this._on = new Map();
+        this.controlManager = new ClientPlayerControlManager(this)
     }
 
     on(event_name, callback) {
@@ -64,7 +93,13 @@ export class TestPlayer {
         this.ws.on('message', (data, isBinary) => {
             const packets = JSON.parse(data);
             for(let packet of packets) {
-                this.onWebsocketPacket(packet);
+                try {
+                    this.onWebsocketPacket(packet);
+                } catch(e) {
+                    console.error(`Error onWebsocketPacket ${ServerClient.getCommandTitle(packet.name)} ${e}`)
+                    this.close()
+                    return
+                }
             }
         });
         //
@@ -81,9 +116,16 @@ export class TestPlayer {
         //if([ServerClient.CMD_PLAYER_STATE].indexOf(packet.name) < 0) {
         //    console.log('ws>', packet);
         //}
+        if (performance.now() > this.nextLogAlive) {
+            this.nextLogAlive += LOG_ALIVE_SECONDS * 1000
+            console.log(`${this.username} still receives packets`)
+        }
         switch(packet.name) {
             case ServerClient.CMD_WORLD_INFO: {
-                this.sendWebsocketPacket(ServerClient.CMD_CONNECT, {world_guid: this.world_guid});
+                this.sendWebsocketPacket(ServerClient.CMD_CONNECT, {
+                    world_guid: this.world_guid,
+                    is_spectator_bot: true
+                });
                 break;
             }
             case ServerClient.CMD_ENTITY_INDICATORS: {
@@ -99,16 +141,9 @@ export class TestPlayer {
                 break;
             }
             case ServerClient.CMD_TELEPORT: {
-                const vec = new Vector(packet.data.pos);
-                const pc = this.pc;
-                try {
-                    pc.player.entity.position.copyFrom(vec);
-                    pc.player_state.pos.copyFrom(vec);
-                    pc.player_state.onGround = false;
-                    this.state.pos = vec.clone();
-                } catch(e) {
-                    debugger;
-                }
+                const vec = new Vector(packet.data.pos)
+                this.controlManager.setPos(vec)
+                this.controlManager.startNewPhysicsSession(vec)
                 break;
             }
             case ServerClient.CMD_CHUNK_LOADED: {
@@ -118,11 +153,30 @@ export class TestPlayer {
                 this.onJoin(packet);
                 break;
             }
-            case ServerClient.CMD_CHAT_SEND_MESSAGE: 
-            case ServerClient.CMD_PLAYER_JOIN: {
+            case ServerClient.CMD_PLAYER_CONTROL_ACCEPTED:
+                this.controlManager.onServerAccepted(packet.data)
+                break
+            case ServerClient.CMD_CHAT_SEND_MESSAGE:
+            case ServerClient.CMD_BUILDING_SCHEMA_ADD:
+            case ServerClient.CMD_HELLO:
+            case ServerClient.CMD_NOTHING:
+            case ServerClient.CMD_BLOCK_SET:
+            case ServerClient.CMD_FLUID_DELTA:
+            case ServerClient.CMD_FLUID_UPDATE:
+            case ServerClient.CMD_MOB_ADD:
+            case ServerClient.CMD_MOB_UPDATE:
+            case ServerClient.CMD_MOB_DELETE:
+            case ServerClient.CMD_PLAYER_STATE:
+            case ServerClient.CMD_PLAYER_JOIN:
+            case ServerClient.CMD_PLAYER_LEAVE: {
                 // do nothing
                 break;
             }
+            default:
+                if (!TestPlayer.loggedUnknownPackets[packet.name]) {
+                    TestPlayer.loggedUnknownPackets[packet.name] = true
+                    console.log(`Unknown packet ${ServerClient.getCommandTitle(packet.name)}`)
+                }
         }
     }
 
@@ -130,35 +184,38 @@ export class TestPlayer {
         this.inventory = packet.data.inventory;
         this.session = packet.data.session;
         this.state = packet.data.state;
-        // hard reset spawn position
-        this.state.pos = this.pos_spawn.clone(); // new Vector(this.state.pos);
-        this.state.rotate = new Vector(this.state.rotate);
         // player control
-        this.pc = new SpectatorPlayerControl(null, this.state.pos);
+        this.controlManager = new ClientPlayerControlManager(this);
         // ticker interval timer
         this.intv = setInterval(() => {
-            const delta = (performance.now() - (this.tick_time || performance.now())) / 1000;
-            this.tick(delta);
-            this.tick_time = performance.now();
+            try {
+                const delta = (performance.now() - (this.tick_time || performance.now())) / 1000;
+                this.tick(delta);
+                this.tick_time = performance.now();
+            } catch (e) {
+                console.error(e)
+                clearInterval(this.intv)
+            }
         }, 50);
 
     }
 
     // Tick player by timer every 50ms
     tick(delta) {
-        const {pc, state} = this;
+        const {controlManager, state, rotate} = this;
+        const pc = controlManager.spectator
         // move straight
         if(Math.random() < .1) {
             const spawn_distance = this.pos_spawn.distance(state.pos);
             if(spawn_distance > MAX_DIST_FROM_SPAWN) {
-                state.rotate.z = this.angleTo(this.pos_spawn);
+                rotate.z = this.angleTo(this.pos_spawn);
             } else {
-                state.rotate.z += (delta * 1000) * (Math.random() - Math.random());
+                rotate.z += (delta * 1000) * (Math.random() - Math.random());
             }
+            PlayerControlManager.fixRotation(rotate)
         }
-        pc.player_state.yaw = state.rotate.z;
-        pc.controls.forward = true;
-        pc.tick(delta);
+        this.controls.forward = true
+        controlManager.update()
         // set block
         /*
         if(Math.random() < .05) {
@@ -177,14 +234,6 @@ export class TestPlayer {
             });
         }
         */
-        // Send player actual position to server
-        state.pos.copyFrom(pc.player.entity.position);
-        this.sendWebsocketPacket(ServerClient.CMD_PLAYER_STATE, compressPlayerStateC({
-            rotate:     state.rotate,
-            pos:        state.pos,
-            sneak:      pc.controls.sneak,
-            ping:       0
-        }));
     }
 
     angleTo(target) {
